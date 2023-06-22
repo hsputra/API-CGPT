@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
+	"github.com/hsputra/API-CGPT/handlers"
 )
 
 func main() {
@@ -37,6 +38,13 @@ func main() {
 
 	// add routes to the router
 	// register new client connection
+	router.GET("/client/register", handlers.Client_register)
+	router.POST("/api/ask", handlers.API_ask)
+	router.GET("/api/connections", handlers.API_getConnections)
+	router.POST("/admin/users/add", handlers.Admin_userAdd)
+	router.POST("/admin/users/delete", handlers.Admin_userDelete)
+	router.GET("/admin/users", handlers.Admin_usersGet)
+
 	// router.POST("/client/register", handlers.Client_register)
 
 	router.GET("/health", func(c *gin.Context) {

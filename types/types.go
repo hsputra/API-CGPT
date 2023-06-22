@@ -37,7 +37,7 @@ type Connection struct {
 
 type ConnectionPool struct {
 	Connections map[string]*Connection
-	Mu          sync.Mutex
+	Mu          sync.RWMutex
 }
 
 // Get string with parameter id of a reference to connection using RW Mutex that returns

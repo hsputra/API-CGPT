@@ -2,9 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
-	"go/types"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/hsputra/API-CGPT/types"
 	"github.com/hsputra/API-CGPT/utils"
 )
 
@@ -32,7 +33,7 @@ func API_ask(c *gin.Context) {
 	}
 
 	//  check if API key is valid
-	verified, err := utils.veryfyToken(c.Request.Header["Authorization"][0])
+	verified, err := utils.VerifyToken(c.Request.Header["Authorization"][0])
 	if err != nil {
 		// error 500 Internal server error
 		c.JSON(500, gin.H{
@@ -70,7 +71,7 @@ func API_ask(c *gin.Context) {
 	// check conversation id
 	connectionPool.Mu.RLock()
 	// check number of connections
-	if len(connectionPool.Pool) == 0 {
+	if len(connectionPool.Connections) == 0 {
 		// error 503 Internal server error
 		c.JSON(503, gin.H{
 			"error": "No available clients",
@@ -83,7 +84,7 @@ func API_ask(c *gin.Context) {
 		var succeeded bool = false
 		for i := 0; i < 3; i++ {
 			// find connection with the lowest load and where heartbeat is after last message time
-			connctionPool.Mu.RLock()
+			connectionPool.Mu.RLock()
 			// for loop to find connections
 			for _, conn := range connectionPool.Connections {
 				// check if connection is nil or last message time is after heartbeat
@@ -127,7 +128,7 @@ func API_ask(c *gin.Context) {
 		}
 	} else {
 		//  check if conversation exists
-		conversation, ok := conversationPool.Pool[request.ConversationId]
+		conversation, ok := conversationPool.Get(request.ConversationId)
 		if !ok {
 			// error 500
 			c.JSON(500, gin.H{
@@ -138,7 +139,7 @@ func API_ask(c *gin.Context) {
 			// get connectionId of the conversation
 			connectionId := conversation.ConnectionId
 			// check if the connection exists
-			connection, ok := connectionPool.Pool[connectionId]
+			connection, ok := connectionPool.Get(connectionId)
 			if !ok {
 				// error 500
 				c.JSON(500, gin.H{
@@ -163,7 +164,113 @@ func API_ask(c *gin.Context) {
 			// convert request to json
 			Data: string(jsonRequest),
 		}
+		err := connection.Ws.WriteJSON(message)
+		if err != nil {
+			// error 500
+			c.JSON(500, gin.H{
+				"error": "Failed to send request",
+			})
+			// delete connection
+			connectionPool.Delete(connection.Id)
+			return
+		}
 
+		// set last message time
+		connection.LastMessageTime = time.Now()
+		// wait for response with timeout
+		for {
+			// read message
+			var receive types.Message
+			connection.Ws.SetReadDeadline(time.Now().Add(120 * time.Second))
+			err = connection.Ws.ReadJSON(&receive)
+			if err != nil {
+				// error 500
+				c.JSON(500, gin.H{
+					"error": "Failed to read response",
+				})
+				// delete connection
+				connectionPool.Delete(connection.Id)
+				return
+			}
+			// check if message is the response
+			if receive.Id == message.Id {
+				// convert response to ChatGptResponse
+				var response types.ChatGptResponse
+				err = json.Unmarshal([]byte(receive.Data), &response)
+				if err != nil {
+					// error 500
+					c.JSON(500, gin.H{
+						"error":    "Failed to convert response to CGPT response",
+						"response": receive,
+					})
+					return
+				}
+				//  add conversation to pool
+				conversation := &types.Conversation{
+					Id:           response.ConversationId,
+					ConnectionId: connection.Id,
+				}
+				conversationPool.Set(conversation)
+				// Send response
+				c.JSON(200, response)
+				// Heartbeat
+				connection.Heartbeat = time.Now()
+				return
+			} else {
+				// error 500
+				c.JSON(500, gin.H{
+					"error": "Failed to find response from the client",
+				})
+				return
+			}
+		}
 	}
+}
 
+func API_getConnections(c *gin.Context) {
+	// Get connections
+	var conections []*types.Connection
+	connectionPool.Mu.RLock()
+	for _, connection := range connectionPool.Connections {
+		conections = append(conections, connection)
+	}
+	connectionPool.Mu.RUnlock()
+	// Send connections
+	c.JSON(200, gin.H{
+		"connections": conections,
+	})
+}
+
+func ping(connection_id string) bool {
+	// Get connection
+	connection, ok := connectionPool.Get(connection_id)
+	// Send ping to the connection
+	if ok {
+		id := utils.GenerateId()
+		send := types.Message{
+			Id:      id,
+			Message: "API-CGPT Ping",
+		}
+		connection.Ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+		err := connection.Ws.WriteJSON(send)
+		if err != nil {
+			return false
+		}
+		// wait for response with timeout
+		for {
+			// read message
+			var receive types.Message
+			err = connection.Ws.ReadJSON(&receive)
+			if err != nil {
+				return false
+			}
+			// check if message is the response
+			if receive.Id == send.Id {
+				return true
+			} else {
+				return false
+			}
+		}
+	}
+	return false
 }
