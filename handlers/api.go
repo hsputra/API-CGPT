@@ -74,7 +74,7 @@ func API_ask(c *gin.Context) {
 	if len(connectionPool.Connections) == 0 {
 		// error 503 Internal server error
 		c.JSON(503, gin.H{
-			"error": "No available clients",
+			"error": "No available clientszzz",
 		})
 		return
 	}
